@@ -6,9 +6,62 @@
 import calendar
 import datetime
 import operator
+import time
 
 from odoo import _, api, models
 from odoo.tools import float_is_zero
+
+show_log = False
+
+if show_log:
+    from collections.abc import Mapping, Container
+    import sys
+
+    def deep_getsizeof(obj, seen=None):
+        """Calcula el tamaño real en bytes de un objeto incluyendo su contenido."""
+        if seen is None:
+            seen = set()
+
+        obj_id = id(obj)
+        if obj_id in seen:
+            return 0
+        seen.add(obj_id)
+
+        size = sys.getsizeof(obj)
+
+        if isinstance(obj, dict):
+            size += sum(
+                deep_getsizeof(k, seen) + deep_getsizeof(v, seen)
+                for k, v in obj.items()
+            )
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            size += sum(deep_getsizeof(i, seen) for i in obj)
+
+        return size
+
+ml_keys = {
+    'id': 0,
+    'date': 1,
+    'entry': 2,
+    'entry_id': 3,
+    'journal_id': 4,
+    'account_id': 5,
+    'partner_id': 6,
+    'partner_name': 7,
+    'ref': 8,
+    'name': 9,
+    'tax_ids': 10,
+    'tax_line_id': 11,
+    'debit': 12,
+    'credit': 13,
+    'balance': 14,
+    'bal_curr': 15,
+    'rec_id': 16,
+    'rec_name': 17,
+    'currency_id': 18,
+    'analytic_distribution': 19,
+    'ref_label': 20
+}
 
 
 class GeneralLedgerReport(models.AbstractModel):
@@ -314,12 +367,8 @@ class GeneralLedgerReport(models.AbstractModel):
             "entry_id": move_line["move_id"][0],
             "journal_id": move_line["journal_id"][0],
             "account_id": move_line["account_id"][0],
-            "partner_id": move_line["partner_id"][0]
-            if move_line["partner_id"]
-            else False,
-            "partner_name": move_line["partner_id"][1]
-            if move_line["partner_id"]
-            else "",
+            "partner_id": move_line["partner_id"][0] if move_line["partner_id"] else False,
+            "partner_name": move_line["partner_id"][1] if move_line["partner_id"] else "",
             "ref": "" if not move_line["ref"] else move_line["ref"],
             "name": "" if not move_line["name"] else move_line["name"],
             "tax_ids": move_line["tax_ids"],
@@ -328,12 +377,8 @@ class GeneralLedgerReport(models.AbstractModel):
             "credit": move_line["credit"],
             "balance": move_line["balance"],
             "bal_curr": move_line["amount_currency"],
-            "rec_id": move_line["full_reconcile_id"][0]
-            if move_line["full_reconcile_id"]
-            else False,
-            "rec_name": move_line["matching_number"]
-            if move_line["full_reconcile_id"]
-            else "",
+            "rec_id": move_line["full_reconcile_id"][0] if move_line["full_reconcile_id"] else False,
+            "rec_name": move_line["matching_number"] if move_line["full_reconcile_id"] else "",
             "currency_id": move_line["currency_id"],
             "analytic_distribution": move_line["analytic_distribution"] or {},
         }
@@ -347,6 +392,7 @@ class GeneralLedgerReport(models.AbstractModel):
         else:
             ref_label = move_line_data["ref"] + " - " + move_line_data["name"]
         move_line_data.update({"ref_label": ref_label})
+        move_line_data = [move_line_data[v] for v in move_line_data.keys()]
         return move_line_data
 
     @api.model
@@ -444,6 +490,8 @@ class GeneralLedgerReport(models.AbstractModel):
         extra_domain,
         grouped_by,
     ):
+        if show_log:
+            print("INICIANDO _get_period_ml_data")
         domain = self._get_period_domain(
             account_ids,
             partner_ids,
@@ -456,76 +504,120 @@ class GeneralLedgerReport(models.AbstractModel):
         if extra_domain:
             domain += extra_domain
         ml_fields = self._get_ml_fields()
-        move_lines = self.env["account.move.line"].search_read(
-            domain=domain, fields=ml_fields, order="date,move_name"
-        )
         journal_ids = set()
         full_reconcile_ids = set()
         taxes_ids = set()
         analytic_ids = set()
         full_reconcile_data = {}
         acc_prt_account_ids = self._get_acc_prt_accounts_ids(company_id, grouped_by)
-        for move_line in move_lines:
-            journal_ids.add(move_line["journal_id"][0])
-            for tax_id in move_line["tax_ids"]:
-                taxes_ids.add(tax_id)
-            for ids in (move_line["analytic_distribution"] or {}).keys():
-                analytic_ids.update(map(int, ids.split(",")))
-            if move_line["full_reconcile_id"]:
-                rec_id = move_line["full_reconcile_id"][0]
-                if rec_id not in full_reconcile_ids:
-                    full_reconcile_data.update(
-                        {
-                            rec_id: {
-                                "id": rec_id,
-                                "name": move_line["matching_number"],
+        batch_size = 30000
+        offset = 0
+        if show_log:
+            count = self.env["account.move.line"].search_count(domain=domain)
+            print(f"INICIANDO Iteración pesada de {count} registros")
+        AML = self.env["account.move.line"]
+        move_line_ids = [v["id"] for v in AML.search_read(
+            domain=domain,
+            fields=["id"],
+            order="date,move_name",
+        )]
+        for i in range(0, len(move_line_ids), batch_size):
+            batch_ids = move_line_ids[i:i + batch_size]
+            if show_log:
+                total_start = time.time()
+                query_start = time.time()
+            moves_domain = [("id", "in", batch_ids)]
+            move_lines = AML.search_read(
+                domain=moves_domain,
+                fields= ml_fields,
+            )
+            move_lines_by_id = {ml["id"]: ml for ml in move_lines}
+            move_lines = [
+                move_lines_by_id[i]
+                for i in batch_ids
+            ]
+            del move_lines_by_id
+            if show_log:
+                query_time = time.time() - query_start
+                process_start = time.time()
+            for move_line in move_lines:
+                journal_ids.add(move_line["journal_id"][0])
+                for tax_id in move_line["tax_ids"]:
+                    taxes_ids.add(tax_id)
+                for ids in (move_line["analytic_distribution"] or {}).keys():
+                    analytic_ids.update(map(int, ids.split(",")))
+                if move_line["full_reconcile_id"]:
+                    rec_id = move_line["full_reconcile_id"][0]
+                    if rec_id not in full_reconcile_ids:
+                        full_reconcile_data.update(
+                            {
+                                rec_id: {
+                                    "id": rec_id,
+                                    "name": move_line["matching_number"],
+                                }
                             }
-                        }
-                    )
-                    full_reconcile_ids.add(rec_id)
-            acc_id = move_line["account_id"][0]
-            ml_id = move_line["id"]
-            if acc_id not in gen_ld_data.keys():
-                gen_ld_data[acc_id] = self._initialize_data(foreign_currency)
-                gen_ld_data[acc_id]["id"] = acc_id
-                gen_ld_data[acc_id]["mame"] = move_line["account_id"][1]
-                gen_ld_data[acc_id][grouped_by] = False
-            if acc_id in acc_prt_account_ids:
-                item_ids = self._prepare_ml_items(move_line, grouped_by)
-                for item in item_ids:
-                    item_id = item["id"]
-                    if item_id not in gen_ld_data[acc_id]:
-                        gen_ld_data[acc_id][grouped_by] = True
-                        gen_ld_data[acc_id][item_id] = self._initialize_data(
-                            foreign_currency
                         )
-                        gen_ld_data[acc_id][item_id]["id"] = item_id
-                        gen_ld_data[acc_id][item_id]["name"] = item["name"]
-                    gen_ld_data[acc_id][item_id][ml_id] = self._get_move_line_data(
-                        move_line
-                    )
-                    gen_ld_data[acc_id][item_id]["fin_bal"]["credit"] += move_line[
-                        "credit"
+                        full_reconcile_ids.add(rec_id)
+                acc_id = move_line["account_id"][0]
+                ml_id = move_line["id"]
+                if acc_id not in gen_ld_data.keys():
+                    gen_ld_data[acc_id] = self._initialize_data(foreign_currency)
+                    gen_ld_data[acc_id]["id"] = acc_id
+                    gen_ld_data[acc_id]["mame"] = move_line["account_id"][1]
+                    gen_ld_data[acc_id][grouped_by] = False
+                if acc_id in acc_prt_account_ids:
+                    item_ids = self._prepare_ml_items(move_line, grouped_by)
+                    for item in item_ids:
+                        item_id = item["id"]
+                        if item_id not in gen_ld_data[acc_id]:
+                            gen_ld_data[acc_id][grouped_by] = True
+                            gen_ld_data[acc_id][item_id] = self._initialize_data(
+                                foreign_currency
+                            )
+                            gen_ld_data[acc_id][item_id]["id"] = item_id
+                            gen_ld_data[acc_id][item_id]["name"] = item["name"]
+                        #gen_ld_data[acc_id][item_id][ml_id] = self._get_move_line_data(
+                        #    move_line
+                        #)
+                        gen_ld_data[acc_id][item_id]["fin_bal"]["credit"] += move_line[
+                            "credit"
+                        ]
+                        gen_ld_data[acc_id][item_id]["fin_bal"]["debit"] += move_line[
+                            "debit"
+                        ]
+                        gen_ld_data[acc_id][item_id]["fin_bal"]["balance"] += move_line[
+                            "balance"
+                        ]
+                        if foreign_currency:
+                            gen_ld_data[acc_id][item_id]["fin_bal"][
+                                "bal_curr"
+                            ] += move_line["amount_currency"]
+                else:
+                    pass
+                    #gen_ld_data[acc_id][ml_id] = self._get_move_line_data(move_line)
+                gen_ld_data[acc_id]["fin_bal"]["credit"] += move_line["credit"]
+                gen_ld_data[acc_id]["fin_bal"]["debit"] += move_line["debit"]
+                gen_ld_data[acc_id]["fin_bal"]["balance"] += move_line["balance"]
+                if foreign_currency:
+                    gen_ld_data[acc_id]["fin_bal"]["bal_curr"] += move_line[
+                        "amount_currency"
                     ]
-                    gen_ld_data[acc_id][item_id]["fin_bal"]["debit"] += move_line[
-                        "debit"
-                    ]
-                    gen_ld_data[acc_id][item_id]["fin_bal"]["balance"] += move_line[
-                        "balance"
-                    ]
-                    if foreign_currency:
-                        gen_ld_data[acc_id][item_id]["fin_bal"][
-                            "bal_curr"
-                        ] += move_line["amount_currency"]
-            else:
-                gen_ld_data[acc_id][ml_id] = self._get_move_line_data(move_line)
-            gen_ld_data[acc_id]["fin_bal"]["credit"] += move_line["credit"]
-            gen_ld_data[acc_id]["fin_bal"]["debit"] += move_line["debit"]
-            gen_ld_data[acc_id]["fin_bal"]["balance"] += move_line["balance"]
-            if foreign_currency:
-                gen_ld_data[acc_id]["fin_bal"]["bal_curr"] += move_line[
-                    "amount_currency"
-                ]
+
+
+            if show_log:
+                process_time = time.time() - process_start
+                total_time = time.time() - total_start
+                print(
+                    f"Porcentage: {((offset/count)*100):.2f}s %| "
+                    f"Query: {query_time:.2f}s | "
+                    f"Process: {process_time:.2f}s | "
+                    f"Total ciclo: {total_time:.2f}s"
+                )
+            offset += batch_size
+            self.env.cache.invalidate()
+        if show_log:
+            print("FINALIZADO iteración pesada")
+
         journals_data = self._get_journals_data(list(journal_ids))
         accounts_data = self._get_accounts_data(gen_ld_data.keys())
         taxes_data = self._get_taxes_data(list(taxes_ids))
@@ -533,6 +625,32 @@ class GeneralLedgerReport(models.AbstractModel):
         rec_after_date_to_ids = self._get_reconciled_after_date_to_ids(
             full_reconcile_data.keys(), date_to
         )
+        if show_log:
+            print("FINALIZADO _get_period_ml_data")
+            structures = {
+                "gen_ld_data": gen_ld_data,
+                "accounts_data": accounts_data,
+                "journals_data": journals_data,
+                "full_reconcile_data": full_reconcile_data,
+                "taxes_data": taxes_data,
+                "analytic_data": analytic_data,
+                "rec_after_date_to_ids": rec_after_date_to_ids,
+            }
+
+            sizes = {}
+
+            for name, obj in structures.items():
+                print(f"Calculando {name}...")
+                sizes[name] = deep_getsizeof(obj)
+
+            total_bytes = sum(sizes.values())
+
+            print(f"\nTotal memoria real: {total_bytes / (1024 * 1024):.2f} MB\n")
+
+            for name, size in sizes.items():
+                size_mb = size / (1024 * 1024)
+                percentage = (size / total_bytes * 100) if total_bytes else 0
+                print(f"{name:25} {size_mb:10.2f} MB   ({percentage:6.2f}%)")
         return (
             gen_ld_data,
             accounts_data,
@@ -548,10 +666,10 @@ class GeneralLedgerReport(models.AbstractModel):
         self, move_lines, last_cumul_balance, rec_after_date_to_ids
     ):
         for move_line in move_lines:
-            move_line["balance"] += last_cumul_balance
-            last_cumul_balance = move_line["balance"]
-            if move_line["rec_id"] in rec_after_date_to_ids:
-                move_line["rec_name"] = "(" + _("future") + ") " + move_line["rec_name"]
+            move_line[ml_keys["balance"]] += last_cumul_balance
+            last_cumul_balance = move_line[ml_keys["balance"]]
+            if move_line[ml_keys["rec_id"]] in rec_after_date_to_ids:
+                move_line[ml_keys["rec_name"]] = "(" + _("future") + ") " + move_line[ml_keys["rec_name"]]
         return move_lines
 
     def _create_account(self, account, acc_id, gen_led_data, rec_after_date_to_ids):
@@ -561,7 +679,7 @@ class GeneralLedgerReport(models.AbstractModel):
                 account.update({ml_id: gen_led_data[acc_id][ml_id]})
             else:
                 move_lines += [gen_led_data[acc_id][ml_id]]
-        move_lines = sorted(move_lines, key=lambda k: (k["date"]))
+        move_lines = sorted(move_lines, key=lambda k: (k[ml_keys["date"]]))
         move_lines = self._recalculate_cumul_balance(
             move_lines,
             gen_led_data[acc_id]["init_bal"]["balance"],
@@ -605,7 +723,7 @@ class GeneralLedgerReport(models.AbstractModel):
                         group_item.update({ml_id: data[data_id][ml_id]})
                     else:
                         move_lines += [data[data_id][ml_id]]
-                move_lines = sorted(move_lines, key=lambda k: (k["date"]))
+                move_lines = sorted(move_lines, key=lambda k: (k[ml_keys["date"]]))
                 move_lines = self._recalculate_cumul_balance(
                     move_lines,
                     data[data_id]["init_bal"]["balance"],
@@ -747,6 +865,8 @@ class GeneralLedgerReport(models.AbstractModel):
 
     # flake8: noqa: C901
     def _get_report_values(self, docids, data):
+        if show_log:
+            report_start = time.time()
         res = super()._get_report_values(docids, data)
         wizard_id = data["wizard_id"]
         company = self.env["res.company"].browse(data["company_id"])
@@ -763,6 +883,8 @@ class GeneralLedgerReport(models.AbstractModel):
         unaffected_earnings_account = data["unaffected_earnings_account"]
         fy_start_date = data["fy_start_date"]
         extra_domain = data["domain"]
+        if show_log:
+            get_initial_balance_data_start = time.time()
         gen_ld_data = self._get_initial_balance_data(
             account_ids,
             partner_ids,
@@ -776,6 +898,9 @@ class GeneralLedgerReport(models.AbstractModel):
             extra_domain,
             grouped_by,
         )
+        if show_log:
+            get_initial_balance_data_time = time.time() - get_initial_balance_data_start
+            get_period_ml_data_start = time.time()
         centralize = data["centralize"]
         (
             gen_ld_data,
@@ -798,6 +923,9 @@ class GeneralLedgerReport(models.AbstractModel):
             extra_domain,
             grouped_by,
         )
+        if show_log:
+            get_period_ml_data_time = time.time() - get_period_ml_data_start
+            create_general_ledger_start = time.time()
         general_ledger = self._create_general_ledger(
             gen_ld_data,
             accounts_data,
@@ -805,6 +933,9 @@ class GeneralLedgerReport(models.AbstractModel):
             rec_after_date_to_ids,
             hide_account_at_0,
         )
+        if show_log:
+            create_general_ledger_time = time.time() - create_general_ledger_start
+            last_compute_start = time.time()
         if centralize:
             for account in general_ledger:
                 if account["centralized"]:
@@ -851,10 +982,10 @@ class GeneralLedgerReport(models.AbstractModel):
             if "move_lines" in gl_item:
                 for ml in gl_item["move_lines"]:
                     ml_currency_id = (
-                        ml["currency_id"][0] if ml["currency_id"] else False
+                        ml[ml_keys["currency_id"]][0] if ml[ml_keys["currency_id"]] else False
                     )
                     if ml_currency_id and ml_currency_id != company.currency_id.id:
-                        gl_item["fin_bal"]["bal_curr"] += ml["bal_curr"]
+                        gl_item["fin_bal"]["bal_curr"] += ml[ml_keys["bal_curr"]]
                         if ml_currency_id not in fin_bal_currency_ids:
                             fin_bal_currency_ids.append(ml_currency_id)
             elif "list_grouped" in gl_item:
@@ -863,11 +994,11 @@ class GeneralLedgerReport(models.AbstractModel):
                     lg_item["fin_bal"]["bal_curr"] = lg_item["init_bal"]["bal_curr"]
                     for ml in lg_item["move_lines"]:
                         ml_currency_id = (
-                            ml["currency_id"][0] if ml["currency_id"] else False
+                            ml[ml_keys["currency_id"]][0] if ml[ml_keys["currency_id"]] else False
                         )
                         if ml_currency_id and ml_currency_id != company.currency_id.id:
-                            lg_item["fin_bal"]["bal_curr"] += ml["bal_curr"]
-                            gl_item["fin_bal"]["bal_curr"] += ml["bal_curr"]
+                            lg_item["fin_bal"]["bal_curr"] += ml[ml_keys["bal_curr"]]
+                            gl_item["fin_bal"]["bal_curr"] += ml[ml_keys["bal_curr"]]
                             if ml_currency_id not in fin_bal_currency_ids:
                                 fin_bal_currency_ids.append(ml_currency_id)
             # If there is only 1 currency, we set that one as fin_bal_currency_id
@@ -877,6 +1008,25 @@ class GeneralLedgerReport(models.AbstractModel):
             if not gl_item["currency_id"] and len(fin_bal_currency_ids) == 1:
                 fin_bal_currency_id = fin_bal_currency_ids[0]
             gl_item["fin_bal_currency_id"] = fin_bal_currency_id
+        if show_log:
+            last_compute_time = time.time() - last_compute_start
+            report_time = time.time() - report_start
+            get_initial_balance_data_percentage = (get_initial_balance_data_time / report_time) * 100
+            get_period_ml_data_percentage = (get_period_ml_data_time / report_time) * 100
+            create_general_ledger_percentage = (create_general_ledger_time / report_time) * 100
+            last_compute_percentage = (last_compute_time / report_time) * 100
+
+            print()
+            print()
+            print(
+                f"TIEMPO get_initial_balance_data: {get_initial_balance_data_time:.2f}s {get_initial_balance_data_percentage:.2f}% |\n"
+                f"TIEMPO get_period_ml_data: {get_period_ml_data_time:.2f}s {get_period_ml_data_percentage:.2f}% |\n"
+                f"TIEMPO create_general_ledger: {create_general_ledger_time:.2f}s {create_general_ledger_percentage:.2f}% |\n"
+                f"TIEMPO last compute time: {last_compute_time:.2f}s {last_compute_percentage:.2f}% |\n"
+                f"TIEMPO Total: {report_time:.2f}s 100%"
+            )
+            print()
+            print()
         res.update(
             {
                 "doc_ids": [wizard_id],
