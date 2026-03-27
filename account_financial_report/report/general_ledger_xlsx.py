@@ -7,34 +7,39 @@
 
 from odoo import _, models
 
-ml_keys = {
-    'id': 0,
-    'date': 1,
-    'entry': 2,
-    'entry_id': 3,
-    'journal_id': 4,
-    'account_id': 5,
-    'partner_id': 6,
-    'partner_name': 7,
-    'ref': 8,
-    'name': 9,
-    'tax_ids': 10,
-    'tax_line_id': 11,
-    'debit': 12,
-    'credit': 13,
-    'balance': 14,
-    'bal_curr': 15,
-    'rec_id': 16,
-    'rec_name': 17,
-    'currency_id': 18,
-    'analytic_distribution': 19,
-    'ref_label': 20,
-    "account": 21,
-    "journal": 22,
-    "currency_name": 23,
-    "taxes_description": 24,
-    "total_bal_curr": 25
-}
+ml_keys = [
+    'id',
+    'date',
+    'entry',
+    'entry_id',
+    'journal_id',
+    'account_id',
+    'partner_id',
+    'partner_name',
+    'ref',
+    'name',
+    'tax_ids',
+    'tax_line_id',
+    'debit',
+    'credit',
+    'balance',
+    'bal_curr',
+    'rec_id',
+    'rec_name',
+    'currency_id',
+    'analytic_distribution',
+    'ref_label',
+    "account",
+    "journal",
+    "currency_name",
+    "taxes_description",
+    "total_bal_curr"
+]
+
+from odoo.addons.account_financial_report.report.general_ledger import show_log
+if show_log:
+    import tracemalloc
+    from odoo.addons.account_financial_report.report.general_ledger import print_structures_sizes
 
 
 class GeneralLedgerXslx(models.AbstractModel):
@@ -160,7 +165,25 @@ class GeneralLedgerXslx(models.AbstractModel):
         return 5
 
     # flake8: noqa: C901
+
     def _generate_report_content(self, workbook, report, data, report_data):
+        if show_log:
+            tracemalloc.start()
+            result = self._generate_report_content_original(workbook, report, data, report_data)
+            snapshot = tracemalloc.take_snapshot()
+            top_stats = snapshot.statistics('lineno')
+
+            print()
+            print("[ TOP 10 MEMORY ]")
+            for stat in top_stats[:10]:
+                print(stat)
+            tracemalloc.stop()
+        else:
+            result = self._generate_report_content_original(workbook, report, data, report_data)
+        return result
+
+
+    def _generate_report_content_original(self, workbook, report, data, report_data):
         res_data = self.env[
             "report.account_financial_report.general_ledger"
         ]._get_report_values(report, data)
@@ -201,30 +224,23 @@ class GeneralLedgerXslx(models.AbstractModel):
 
                 # Display account move lines
                 for line in account["move_lines"]:
-                    line += [
-                        account["code"],
-                        journals_data[line[ml_keys["journal_id"]]]["code"],
-                        False,
-                        False,
-                        False
-                    ]
+                    line.account = account["code"]
+                    line.journal = journals_data[line.journal_id]["code"]
                     line_currency_id = (
-                        line[ml_keys["currency_id"]][0] if line[ml_keys["currency_id"]] else False
+                        line.currency_id[0] if line.currency_id else False
                     )
                     if line_currency_id and line_currency_id != company_currency.id:
-                        line[ml_keys["currency_name"]] = line[ml_keys["currency_id"]][1]
-                        line[ml_keys["currency_id"]] = line[ml_keys["currency_id"]][0]
-                    if line[ml_keys["ref_label"]] != "Centralized entries":
+                        line.currency_name = line.currency_id[1]
+                        line.currency_id = line.currency_id[0]
+                    if line.ref_label != "Centralized entries":
                         taxes_description = ""
                         analytic_distribution = ""
-                        for tax_id in line[ml_keys["tax_ids"]]:
+                        for tax_id in line.tax_ids:
                             taxes_description += taxes_data[tax_id]["tax_name"] + " "
-                        if line[ml_keys["tax_line_id"]]:
-                            taxes_description += line[ml_keys["tax_line_id"]][1]
+                        if line.tax_line_id:
+                            taxes_description += line.tax_line_id[1]
                         analytic_list = []
-                        for account_ids, percentage in line[ml_keys[
-                            "analytic_distribution"
-                        ]].items():
+                        for account_ids, percentage in line.analytic_distribution.items():
                             for account_id in account_ids.split(","):
                                 name = analytic_data[int(account_id)]["name"]
                                 if percentage < 100:
@@ -233,16 +249,16 @@ class GeneralLedgerXslx(models.AbstractModel):
                                     analytic_list.append(name)
                         analytic_distribution = ", ".join(analytic_list)
 
-                        line[ml_keys["taxes_description"]] = taxes_description
-                        line[ml_keys["analytic_distribution"]] = analytic_distribution
+                        line.taxes_description = taxes_description
+                        line.analytic_distribution = analytic_distribution
                     if (
                         foreign_currency
                         and line_currency_id
                         and line_currency_id != company_currency.id
                     ):
-                        total_bal_curr += line[ml_keys["bal_curr"]]
-                        line[ml_keys["total_bal_curr"]] = total_bal_curr
-                    self.write_line_from_dict({key: line[pos] for key, pos in ml_keys.items()}, report_data)
+                        total_bal_curr += line.bal_curr
+                        line.total_bal_curr = total_bal_curr
+                    self.write_line_from_dict({key: getattr(line, key) for key in ml_keys}, report_data)
                 # Display ending balance line for account
                 account.update(
                     {
@@ -304,29 +320,22 @@ class GeneralLedgerXslx(models.AbstractModel):
 
                     # Display account move lines
                     for line in group_item["move_lines"]:
-                        line += [
-                            account["code"],
-                            journals_data[line[ml_keys["journal_id"]]]["code"],
-                            False,
-                            False,
-                            False
-                        ]
+                        line.account = account["code"]
+                        line.journal = journals_data[line.journal_id]["code"]
                         line_currency_id = (
-                            line[ml_keys["currency_id"]][0] if line[ml_keys["currency_id"]] else False
+                            line.currency_id[0] if line.currency_id else False
                         )
                         if line_currency_id and line_currency_id != company_currency.id:
-                            line[ml_keys["currency_name"]] = line[ml_keys["currency_id"]][1]
-                            line[ml_keys["currency_id"]] = line[ml_keys["currency_id"]][0]
-                        if line[ml_keys["ref_label"]] != "Centralized entries":
+                            line.currency_name = line.currency_id[1]
+                            line.currency_id = line.currency_id[0]
+                        if line.ref_label != "Centralized entries":
                             taxes_description = ""
                             analytic_distribution = ""
-                            for tax_id in line[ml_keys["tax_ids"]]:
+                            for tax_id in line.tax_ids:
                                 taxes_description += (
                                     taxes_data[tax_id]["tax_name"] + " "
                                 )
-                            for account_id, value in line[ml_keys[
-                                "analytic_distribution"
-                            ]].items():
+                            for account_id, value in line.analytic_distribution.items():
                                 if value < 100:
                                     analytic_distribution += "%s %d%% " % (
                                         analytic_data[int(account_id)]["name"],
@@ -336,16 +345,16 @@ class GeneralLedgerXslx(models.AbstractModel):
                                     analytic_distribution += (
                                         "%s " % analytic_data[int(account_id)]["name"]
                                     )
-                            line[ml_keys["taxes_description"]] = taxes_description
-                            line[ml_keys["analytic_distribution"]] = analytic_distribution
+                            line.taxes_description = taxes_description
+                            line.analytic_distribution = analytic_distribution
                         if (
                             foreign_currency
                             and line_currency_id
                             and line_currency_id != company_currency.id
                         ):
                             total_bal_curr += line["bal_curr"]
-                            line[ml_keys["total_bal_curr"]] = total_bal_curr
-                        self.write_line_from_dict({key: line[pos] for key, pos in ml_keys.items()}, report_data)
+                            line.total_bal_curr = total_bal_curr
+                        self.write_line_from_dict({key: getattr(line, key) for key in ml_keys}, report_data)
 
                     # Display ending balance line for partner
                     group_item.update(
@@ -385,6 +394,8 @@ class GeneralLedgerXslx(models.AbstractModel):
 
             # 2 lines break
             report_data["row_pos"] += 2
+        if show_log:
+            print_structures_sizes(locals())
 
     def write_initial_balance_from_dict(self, my_object, report_data):
         """Specific function to write initial balance for General Ledger"""

@@ -14,6 +14,7 @@ from odoo.tools import float_is_zero
 show_log = False
 
 if show_log:
+    from line_profiler import LineProfiler
     from collections.abc import Mapping, Container
     import sys
 
@@ -39,29 +40,61 @@ if show_log:
 
         return size
 
-ml_keys = {
-    'id': 0,
-    'date': 1,
-    'entry': 2,
-    'entry_id': 3,
-    'journal_id': 4,
-    'account_id': 5,
-    'partner_id': 6,
-    'partner_name': 7,
-    'ref': 8,
-    'name': 9,
-    'tax_ids': 10,
-    'tax_line_id': 11,
-    'debit': 12,
-    'credit': 13,
-    'balance': 14,
-    'bal_curr': 15,
-    'rec_id': 16,
-    'rec_name': 17,
-    'currency_id': 18,
-    'analytic_distribution': 19,
-    'ref_label': 20
-}
+    def print_structures_sizes(structures):
+        sizes = {}
+
+        for name, obj in structures.items():
+            print(f"Calculando {name}...")
+            sizes[name] = deep_getsizeof(obj)
+
+        total_bytes = sum(sizes.values())
+
+        print(f"\nTotal memoria real: {total_bytes / (1024 * 1024):.2f} MB\n")
+
+        for name, size in sizes.items():
+            size_mb = size / (1024 * 1024)
+            percentage = (size / total_bytes * 100) if total_bytes else 0
+            print(f"{name:25} {size_mb:10.2f} MB   ({percentage:6.2f}%)")
+
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
+
+
+@dataclass(slots=True)
+class MoveLineData:
+    id: Optional[int] = None
+    date: Optional[str] = None
+    entry: Optional[str] = None
+    entry_id: Optional[int] = None
+    journal_id: Optional[int] = None
+    account_id: Optional[int] = None
+
+    partner_id: Optional[int] = None
+    partner_name: Optional[str] = None
+
+    ref: Optional[str] = None
+    name: Optional[str] = None
+
+    tax_ids: Optional[List[int]] = field(default_factory=list)
+    tax_line_id: Optional[Any] = None
+
+    debit: Optional[float] = 0
+    credit: Optional[float] = 0
+    balance: Optional[float] = 0
+    bal_curr: Optional[float] = 0
+
+    rec_id: Optional[int] = None
+    rec_name: Optional[str] = None
+
+    currency_id: Optional[int] = None
+    analytic_distribution: Optional[Dict[str, float]] = field(default_factory=dict)
+
+    ref_label: Optional[str] = None
+    account: Optional[str] = None
+    journal: Optional[str] = None
+    currency_name: Optional[str] = None
+    taxes_description: Optional[str] = None
+    total_bal_curr: Optional[float] = 0
 
 
 class GeneralLedgerReport(models.AbstractModel):
@@ -392,8 +425,9 @@ class GeneralLedgerReport(models.AbstractModel):
         else:
             ref_label = move_line_data["ref"] + " - " + move_line_data["name"]
         move_line_data.update({"ref_label": ref_label})
-        move_line_data = [move_line_data[v] for v in move_line_data.keys()]
-        return move_line_data
+        data = MoveLineData()
+        [setattr(data, v, move_line_data[v]) for v in move_line_data.keys() if move_line_data[v] != False]
+        return data
 
     @api.model
     def _get_period_domain(
@@ -576,9 +610,10 @@ class GeneralLedgerReport(models.AbstractModel):
                             )
                             gen_ld_data[acc_id][item_id]["id"] = item_id
                             gen_ld_data[acc_id][item_id]["name"] = item["name"]
-                        #gen_ld_data[acc_id][item_id][ml_id] = self._get_move_line_data(
-                        #    move_line
-                        #)
+                        gen_ld_data[acc_id][item_id][ml_id] = self._get_move_line_data(
+                            move_line
+                        )
+                        # gen_ld_data[acc_id][item_id][ml_id] = ml_id
                         gen_ld_data[acc_id][item_id]["fin_bal"]["credit"] += move_line[
                             "credit"
                         ]
@@ -593,8 +628,8 @@ class GeneralLedgerReport(models.AbstractModel):
                                 "bal_curr"
                             ] += move_line["amount_currency"]
                 else:
-                    pass
-                    #gen_ld_data[acc_id][ml_id] = self._get_move_line_data(move_line)
+                    gen_ld_data[acc_id][ml_id] = self._get_move_line_data(move_line)
+                    #gen_ld_data[acc_id][ml_id] = ml_id
                 gen_ld_data[acc_id]["fin_bal"]["credit"] += move_line["credit"]
                 gen_ld_data[acc_id]["fin_bal"]["debit"] += move_line["debit"]
                 gen_ld_data[acc_id]["fin_bal"]["balance"] += move_line["balance"]
@@ -636,21 +671,7 @@ class GeneralLedgerReport(models.AbstractModel):
                 "analytic_data": analytic_data,
                 "rec_after_date_to_ids": rec_after_date_to_ids,
             }
-
-            sizes = {}
-
-            for name, obj in structures.items():
-                print(f"Calculando {name}...")
-                sizes[name] = deep_getsizeof(obj)
-
-            total_bytes = sum(sizes.values())
-
-            print(f"\nTotal memoria real: {total_bytes / (1024 * 1024):.2f} MB\n")
-
-            for name, size in sizes.items():
-                size_mb = size / (1024 * 1024)
-                percentage = (size / total_bytes * 100) if total_bytes else 0
-                print(f"{name:25} {size_mb:10.2f} MB   ({percentage:6.2f}%)")
+            print_structures_sizes(structures)
         return (
             gen_ld_data,
             accounts_data,
@@ -666,10 +687,10 @@ class GeneralLedgerReport(models.AbstractModel):
         self, move_lines, last_cumul_balance, rec_after_date_to_ids
     ):
         for move_line in move_lines:
-            move_line[ml_keys["balance"]] += last_cumul_balance
-            last_cumul_balance = move_line[ml_keys["balance"]]
-            if move_line[ml_keys["rec_id"]] in rec_after_date_to_ids:
-                move_line[ml_keys["rec_name"]] = "(" + _("future") + ") " + move_line[ml_keys["rec_name"]]
+            move_line.balance += last_cumul_balance
+            last_cumul_balance = move_line.balance
+            if move_line.rec_id in rec_after_date_to_ids:
+                move_line.rec_name = "(" + _("future") + ") " + move_line.rec_name
         return move_lines
 
     def _create_account(self, account, acc_id, gen_led_data, rec_after_date_to_ids):
@@ -679,7 +700,7 @@ class GeneralLedgerReport(models.AbstractModel):
                 account.update({ml_id: gen_led_data[acc_id][ml_id]})
             else:
                 move_lines += [gen_led_data[acc_id][ml_id]]
-        move_lines = sorted(move_lines, key=lambda k: (k[ml_keys["date"]]))
+        move_lines = sorted(move_lines, key=lambda k: k.date)
         move_lines = self._recalculate_cumul_balance(
             move_lines,
             gen_led_data[acc_id]["init_bal"]["balance"],
@@ -723,7 +744,7 @@ class GeneralLedgerReport(models.AbstractModel):
                         group_item.update({ml_id: data[data_id][ml_id]})
                     else:
                         move_lines += [data[data_id][ml_id]]
-                move_lines = sorted(move_lines, key=lambda k: (k[ml_keys["date"]]))
+                move_lines = sorted(move_lines, key=lambda k: k.date)
                 move_lines = self._recalculate_cumul_balance(
                     move_lines,
                     data[data_id]["init_bal"]["balance"],
@@ -863,7 +884,6 @@ class GeneralLedgerReport(models.AbstractModel):
             list_centralized_ml += list(centralized_ml[jnl_id].values())
         return list_centralized_ml
 
-    # flake8: noqa: C901
     def _get_report_values(self, docids, data):
         if show_log:
             report_start = time.time()
@@ -982,10 +1002,10 @@ class GeneralLedgerReport(models.AbstractModel):
             if "move_lines" in gl_item:
                 for ml in gl_item["move_lines"]:
                     ml_currency_id = (
-                        ml[ml_keys["currency_id"]][0] if ml[ml_keys["currency_id"]] else False
+                        ml.currency_id[0] if ml.currency_id else False
                     )
                     if ml_currency_id and ml_currency_id != company.currency_id.id:
-                        gl_item["fin_bal"]["bal_curr"] += ml[ml_keys["bal_curr"]]
+                        gl_item["fin_bal"]["bal_curr"] += ml.bal_curr
                         if ml_currency_id not in fin_bal_currency_ids:
                             fin_bal_currency_ids.append(ml_currency_id)
             elif "list_grouped" in gl_item:
@@ -994,11 +1014,11 @@ class GeneralLedgerReport(models.AbstractModel):
                     lg_item["fin_bal"]["bal_curr"] = lg_item["init_bal"]["bal_curr"]
                     for ml in lg_item["move_lines"]:
                         ml_currency_id = (
-                            ml[ml_keys["currency_id"]][0] if ml[ml_keys["currency_id"]] else False
+                            ml.currency_id[0] if ml.currency_id else False
                         )
                         if ml_currency_id and ml_currency_id != company.currency_id.id:
-                            lg_item["fin_bal"]["bal_curr"] += ml[ml_keys["bal_curr"]]
-                            gl_item["fin_bal"]["bal_curr"] += ml[ml_keys["bal_curr"]]
+                            lg_item["fin_bal"]["bal_curr"] += ml.bal_curr
+                            gl_item["fin_bal"]["bal_curr"] += ml.bal_curr
                             if ml_currency_id not in fin_bal_currency_ids:
                                 fin_bal_currency_ids.append(ml_currency_id)
             # If there is only 1 currency, we set that one as fin_bal_currency_id
@@ -1008,25 +1028,6 @@ class GeneralLedgerReport(models.AbstractModel):
             if not gl_item["currency_id"] and len(fin_bal_currency_ids) == 1:
                 fin_bal_currency_id = fin_bal_currency_ids[0]
             gl_item["fin_bal_currency_id"] = fin_bal_currency_id
-        if show_log:
-            last_compute_time = time.time() - last_compute_start
-            report_time = time.time() - report_start
-            get_initial_balance_data_percentage = (get_initial_balance_data_time / report_time) * 100
-            get_period_ml_data_percentage = (get_period_ml_data_time / report_time) * 100
-            create_general_ledger_percentage = (create_general_ledger_time / report_time) * 100
-            last_compute_percentage = (last_compute_time / report_time) * 100
-
-            print()
-            print()
-            print(
-                f"TIEMPO get_initial_balance_data: {get_initial_balance_data_time:.2f}s {get_initial_balance_data_percentage:.2f}% |\n"
-                f"TIEMPO get_period_ml_data: {get_period_ml_data_time:.2f}s {get_period_ml_data_percentage:.2f}% |\n"
-                f"TIEMPO create_general_ledger: {create_general_ledger_time:.2f}s {create_general_ledger_percentage:.2f}% |\n"
-                f"TIEMPO last compute time: {last_compute_time:.2f}s {last_compute_percentage:.2f}% |\n"
-                f"TIEMPO Total: {report_time:.2f}s 100%"
-            )
-            print()
-            print()
         res.update(
             {
                 "doc_ids": [wizard_id],
@@ -1052,6 +1053,26 @@ class GeneralLedgerReport(models.AbstractModel):
                 "currency_model": self.env["res.currency"],
             }
         )
+        if show_log:
+            last_compute_time = time.time() - last_compute_start
+            report_time = time.time() - report_start
+            get_initial_balance_data_percentage = (get_initial_balance_data_time / report_time) * 100
+            get_period_ml_data_percentage = (get_period_ml_data_time / report_time) * 100
+            create_general_ledger_percentage = (create_general_ledger_time / report_time) * 100
+            last_compute_percentage = (last_compute_time / report_time) * 100
+
+            print()
+            print()
+            print(
+                f"TIEMPO get_initial_balance_data: {get_initial_balance_data_time:.2f}s {get_initial_balance_data_percentage:.2f}% |\n"
+                f"TIEMPO get_period_ml_data: {get_period_ml_data_time:.2f}s {get_period_ml_data_percentage:.2f}% |\n"
+                f"TIEMPO create_general_ledger: {create_general_ledger_time:.2f}s {create_general_ledger_percentage:.2f}% |\n"
+                f"TIEMPO last compute time: {last_compute_time:.2f}s {last_compute_percentage:.2f}% |\n"
+                f"TIEMPO Total: {report_time:.2f}s 100%"
+            )
+            print()
+            print(print_structures_sizes(res))
+            print()
         return res
 
     def _get_ml_fields(self):
