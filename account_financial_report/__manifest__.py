@@ -15,7 +15,7 @@
     "ForgeFlow,"
     "Odoo Community Association (OCA)",
     "website": "https://github.com/OCA/account-financial-reporting",
-    "depends": ["account", "date_range", "report_xlsx"],
+    "depends": ["account", "date_range", "report_xlsx", "queue_job"],
     "data": [
         "security/ir.model.access.csv",
         "security/security.xml",
@@ -26,6 +26,7 @@
         "wizard/trial_balance_wizard_view.xml",
         "wizard/vat_report_wizard_view.xml",
         "view/account_age_report_configuration_views.xml",
+        "view/report_ledger_files.xml",
         "menuitems.xml",
         "reports.xml",
         "report/templates/layouts.xml",
@@ -43,6 +44,7 @@
         "view/report_aged_partner_balance.xml",
         "view/report_vat_report.xml",
         "view/res_config_settings_views.xml",
+        "data/ir_cron.xml",
     ],
     "assets": {
         "web.assets_backend": [

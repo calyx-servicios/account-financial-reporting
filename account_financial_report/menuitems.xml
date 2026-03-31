@@ -12,6 +12,12 @@
         id="menu_general_ledger_wizard"
         sequence="10"
     />
+    <menuitem id="menu_ledger_report_file"
+        name="Libro Mayor Archivos"
+        parent="menu_oca_reports"
+        action="ledger_report_file_action"
+        sequence="12"
+    />
     <menuitem
         parent="menu_oca_reports"
         action="action_journal_ledger_wizard"

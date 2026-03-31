@@ -352,7 +352,7 @@ class GeneralLedgerXslx(models.AbstractModel):
                             and line_currency_id
                             and line_currency_id != company_currency.id
                         ):
-                            total_bal_curr += line["bal_curr"]
+                            total_bal_curr += line.bal_curr
                             line.total_bal_curr = total_bal_curr
                         self.write_line_from_dict({key: getattr(line, key) for key in ml_keys}, report_data)
 

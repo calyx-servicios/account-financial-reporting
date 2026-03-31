@@ -68,3 +68,8 @@ class AccountMoveLine(models.Model):
         if self.env.context.get("skip_search_count"):
             return 0
         return super().search_count(domain, limit=limit)
+
+    # CAMBIAR
+    @classmethod
+    def _auto_init(cls):
+        return None
