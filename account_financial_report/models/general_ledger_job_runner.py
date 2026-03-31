@@ -71,6 +71,10 @@ class GeneralLedgerJobRunner(models.Model):
         string="Espacio en Disco",
         compute="compute_fields"
     )
+    exec_time = fields.Char(
+        string="Tiempo de procesado",
+        compute="compute_fields"
+    )
     file_path = fields.Text()
     # Doble cc intencional
     ccompany_id = fields.Many2one(
@@ -84,6 +88,12 @@ class GeneralLedgerJobRunner(models.Model):
             start_date = rec.date.replace(day=1).strftime('%d-%m-%Y')
             rec.name = f"Desde: {start_date} - Hasta: {end_date}"
             rec.disk_space = format_size(rec.file_path)
+            rec.exec_time = "-"
+            if rec.file_path:
+                time_path = os.path.abspath(os.path.join(os.path.dirname(rec.file_path), "time.txt"))
+                if os.path.isfile(time_path):
+                    with open(time_path, "r") as f:
+                        rec.exec_time = f.read().strip()
 
     def action_open_ledger_reports(self):
         self.create_records()

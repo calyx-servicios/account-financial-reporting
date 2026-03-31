@@ -8,6 +8,7 @@
             <tree string="Archivos libro mayor">
                 <field name="name"/>
                 <field name="disk_space"/>
+                <field name="exec_time"/>
                 <field name="ccompany_id"/>
                 <button string="Descargar" name="download_report" type="object" class="oe_highlight"/>
             </tree>
