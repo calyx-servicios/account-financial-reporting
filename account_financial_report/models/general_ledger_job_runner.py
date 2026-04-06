@@ -13,6 +13,9 @@ _logger = logging.getLogger(__name__)
 
 tag = "GENERAL LEDGER CRON: "
 
+def get_param(env, param):
+    return env['ir.config_parameter'].sudo().get_param(param, False)
+
 def format_time(seconds):
     ms = int((seconds % 1) * 1000)
     seconds = int(seconds)
@@ -121,8 +124,7 @@ class GeneralLedgerJobRunner(models.Model):
         ])
         exist_companys = exist_records.mapped("ccompany_id.id")
         today = datetime.now(tz).strftime('%Y-%m-%d')
-        module_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        reports_path = os.path.abspath(os.path.join(module_path, "ledger_reports"))
+        reports_path = get_reports_dir()
         for company in self.env["res.company"].search([]):
             if company.id not in exist_companys:
                 company_path = os.path.abspath(os.path.join(reports_path, company.name))
@@ -138,9 +140,10 @@ class GeneralLedgerJobRunner(models.Model):
 
     def cron_enqueue_jobs(self):
         hour = datetime.now(tz).hour
-        if not (0 <= hour <= 6):
-            _logger.info(tag + "no ejecuta - fuera de horario")
-            return
+        if not (get_param(self.env, "general_ledger_cron.anytime") == "True"):
+            if not (0 <= hour <= 6):
+                _logger.info(tag + "no ejecuta - fuera de horario")
+                return
         _logger.info(tag + "Encolando job queue_job")
         existing = self.env["queue.job"].search([
             ("identity_key", "=", "general_ledger_unique_job"),
@@ -175,14 +178,13 @@ class GeneralLedgerJobRunner(models.Model):
         first_day = today.replace(day=1)
         wizard.date_from = first_day
         wizard.date_to = today
-        # # CAMBIAR
-        # start_test = today.replace(day=1, month=1)
-        # end_test = today.replace(day=10, month=1)
-        # wizard.date_from = start_test
-        # wizard.date_to = end_test
-
+        test_date_from = get_param(self.env, "general_ledger_cron.test_date_from")
+        test_date_to = get_param(self.env, "general_ledger_cron.test_date_to")
+        if test_date_from:
+            wizard.date_from = datetime.strptime(test_date_from, "%Y-%m-%d").date()
+        if test_date_to:
+            wizard.date_to = datetime.strptime(test_date_to, "%Y-%m-%d").date()
         data = wizard._prepare_report_data()
-
         start_time = gettime.perf_counter()
         report_name = "a_f_r.report_general_ledger_xlsx"
         report_type = "xlsx"

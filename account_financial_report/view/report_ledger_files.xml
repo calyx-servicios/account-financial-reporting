@@ -5,7 +5,7 @@
         <field name="name">ledger.report.file.tree</field>
         <field name="model">general.ledger.job.runner</field>
         <field name="arch" type="xml">
-            <tree string="Archivos libro mayor">
+            <tree string="Archivos libro mayor" edit="False" create="False" delete="False">
                 <field name="name"/>
                 <field name="disk_space"/>
                 <field name="exec_time"/>
