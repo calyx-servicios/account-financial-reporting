@@ -11,7 +11,10 @@ import time
 from odoo import _, api, models
 from odoo.tools import float_is_zero
 
-show_log = False
+import logging
+_logger = logging.getLogger(__name__)
+
+show_log = True
 
 if show_log:
     from line_profiler import LineProfiler
@@ -525,7 +528,7 @@ class GeneralLedgerReport(models.AbstractModel):
         grouped_by,
     ):
         if show_log:
-            print("INICIANDO _get_period_ml_data")
+            _logger.info("INICIANDO _get_period_ml_data")
         domain = self._get_period_domain(
             account_ids,
             partner_ids,
@@ -548,7 +551,7 @@ class GeneralLedgerReport(models.AbstractModel):
         offset = 0
         if show_log:
             count = self.env["account.move.line"].search_count(domain=domain)
-            print(f"INICIANDO Iteración pesada de {count} registros")
+            _logger.info(f"INICIANDO Iteración pesada de {count} registros")
         AML = self.env["account.move.line"]
         move_line_ids = [v["id"] for v in AML.search_read(
             domain=domain,
@@ -642,7 +645,7 @@ class GeneralLedgerReport(models.AbstractModel):
             if show_log:
                 process_time = time.time() - process_start
                 total_time = time.time() - total_start
-                print(
+                _logger.info(
                     f"Porcentage: {((offset/count)*100):.2f}s %| "
                     f"Query: {query_time:.2f}s | "
                     f"Process: {process_time:.2f}s | "
@@ -651,7 +654,7 @@ class GeneralLedgerReport(models.AbstractModel):
             offset += batch_size
             self.env.cache.invalidate()
         if show_log:
-            print("FINALIZADO iteración pesada")
+            _logger.info("FINALIZADO iteración pesada")
 
         journals_data = self._get_journals_data(list(journal_ids))
         accounts_data = self._get_accounts_data(gen_ld_data.keys())
@@ -661,7 +664,7 @@ class GeneralLedgerReport(models.AbstractModel):
             full_reconcile_data.keys(), date_to
         )
         if show_log:
-            print("FINALIZADO _get_period_ml_data")
+            _logger.info("FINALIZADO _get_period_ml_data")
             structures = {
                 "gen_ld_data": gen_ld_data,
                 "accounts_data": accounts_data,
