@@ -1,4 +1,4 @@
-from odoo import models, fields, http
+from odoo import models, fields, http, api
 from odoo.http import request
 from datetime import datetime, date, time
 from pathlib import Path
@@ -7,11 +7,14 @@ import logging
 import os
 import shutil
 import pytz
+import logging
+_logger = logging.getLogger(__name__)
 
 tz = pytz.timezone('America/Argentina/Buenos_Aires')
 _logger = logging.getLogger(__name__)
 
 tag = "GENERAL LEDGER CRON: "
+first_call = True
 
 def get_param(env, param):
     return env['ir.config_parameter'].sudo().get_param(param, False)
@@ -139,16 +142,22 @@ class GeneralLedgerJobRunner(models.Model):
                     })
 
     def cron_enqueue_jobs(self):
+        jobs_domain = [
+            ("identity_key", "=", "general_ledger_unique_job"),
+            ("state", "in", ["pending", "enqueued", "started"]),
+        ]
+        global first_call
+        if first_call:
+            jobs = self.env["queue.job"].search(jobs_domain)
+            jobs.unlink()
+            first_call = False
         hour = datetime.now(tz).hour
         if not (get_param(self.env, "general_ledger_cron.anytime") == "True"):
             if not (0 <= hour <= 6):
                 _logger.info(tag + "no ejecuta - fuera de horario")
                 return
         _logger.info(tag + "Encolando job queue_job")
-        existing = self.env["queue.job"].search([
-            ("identity_key", "=", "general_ledger_unique_job"),
-            ("state", "in", ["pending", "enqueued", "started"]),
-        ], limit=1)
+        existing = self.env["queue.job"].search(jobs_domain, limit=1)
         if existing:
             _logger.info(
                 tag + "Job no encolado porque ya existe uno activo (id=%s, state=%s)",
