@@ -171,6 +171,8 @@ class GeneralLedgerJobRunner(models.Model):
         ).run_general_ledger()
 
     def run_general_ledger(self):
+        global first_call
+        first_call = False
         ledger_reports_path = get_reports_dir()
         companys = self.env["res.company"].search([])
         for company in companys:
