@@ -17,7 +17,6 @@ _logger = logging.getLogger(__name__)
 show_log = True
 
 if show_log:
-    from line_profiler import LineProfiler
     from collections.abc import Mapping, Container
     import sys
 
