@@ -175,7 +175,7 @@ class GeneralLedgerXslx(models.AbstractModel):
             snapshot = tracemalloc.take_snapshot()
             top_stats = snapshot.statistics('lineno')
 
-            _logger.info()
+            _logger.info("")
             _logger.info("[ TOP 10 MEMORY ]")
             for stat in top_stats[:10]:
                 _logger.info(stat)
