@@ -558,6 +558,8 @@ class GeneralLedgerReport(models.AbstractModel):
             order="date,move_name",
         )]
         for i in range(0, len(move_line_ids), batch_size):
+            self.env.cache.clear()
+            self.env.cache.invalidate()
             batch_ids = move_line_ids[i:i + batch_size]
             if show_log:
                 total_start = time.time()
@@ -1084,6 +1086,8 @@ class GeneralLedgerReport(models.AbstractModel):
             print()
             print(print_structures_sizes(res))
             print()
+        self.env.cache.clear()
+        self.env.cache.invalidate()
         return res
 
     def _get_ml_fields(self):
