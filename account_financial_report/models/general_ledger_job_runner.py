@@ -1,4 +1,5 @@
 from odoo import models, fields, http, api
+from odoo.tools import date_utils
 from odoo.http import request
 from datetime import datetime, date, time
 from pathlib import Path
@@ -171,31 +172,69 @@ class GeneralLedgerJobRunner(models.Model):
         ).run_general_ledger()
 
     def run_general_ledger(self):
-        global first_call
-        first_call = False
-        ledger_reports_path = get_reports_dir()
-        companys = self.env["res.company"].search([])
-        for company in companys:
-            generate_company, ledger_path = prepare_company(ledger_reports_path, company)
-            if generate_company:
-                _logger.info(tag + "Generando Reporte para compañia %s" % company.name)
-                self.generate_ledger(ledger_path, company)
-                break
+        try:
+            global first_call
+            first_call = False
+            ledger_reports_path = get_reports_dir()
+            companys = self.env["res.company"].search([])
+            for company in companys:
+                generate_company, ledger_path = prepare_company(ledger_reports_path, company)
+                if generate_company:
+                    _logger.info(tag + "Generando Reporte para compañia %s" % company.name)
+                    self.generate_ledger(ledger_path, company)
+                    break
+        except Exception as e:
+            _logger.exception(f"{tag} Error generando reporte de libro mayor")
+
+    def _get_general_ledger_data(self):
+        return {
+            'date_from': False,
+            'date_to': False,
+            'only_posted_moves': True,
+            'hide_account_at_0': False,
+            'foreign_currency': True,
+            'company_id': False,
+            'account_ids': [],
+            'partner_ids': [],
+            'grouped_by': 'partners',
+            'cost_center_ids': [],
+            'show_cost_center': True,
+            'journal_ids': [],
+            'centralize': True,
+            'fy_start_date': False,
+            'unaffected_earnings_account': False,
+            'account_financial_report_lang': 'en_US',
+            'domain': []
+        }
 
     def generate_ledger(self, ledger_path, company):
-        wizard = self.env["general.ledger.report.wizard"].create({})
-        wizard.company_id = company.id
+        data = self._get_general_ledger_data()
+        company_id = company.id
         today = datetime.now(tz).date()
         first_day = today.replace(day=1)
-        wizard.date_from = first_day
-        wizard.date_to = today
+        date_from = first_day
+        date_to = today
         test_date_from = get_param(self.env, "general_ledger_cron.test_date_from")
         test_date_to = get_param(self.env, "general_ledger_cron.test_date_to")
         if test_date_from:
-            wizard.date_from = datetime.strptime(test_date_from, "%Y-%m-%d").date()
+            date_from = datetime.strptime(test_date_from, "%Y-%m-%d").date()
         if test_date_to:
-            wizard.date_to = datetime.strptime(test_date_to, "%Y-%m-%d").date()
-        data = wizard._prepare_report_data()
+            date_to = datetime.strptime(test_date_to, "%Y-%m-%d").date()
+        data["date_from"] = date_from
+        data["date_to"] = date_to
+        data["company_id"] = company_id
+        fy_start_date, foo = date_utils.get_fiscal_year(
+            date_from,
+            day=company.fiscalyear_last_day,
+            month=int(company.fiscalyear_last_month),
+        )
+        data["fy_start_date"] = fy_start_date
+        unaffected_earnings_account = self.env["account.account"].search([
+            ("account_type", "=", "equity_unaffected"),
+            ("company_id", "=", company.id),
+        ], limit=1)
+        data["unaffected_earnings_account"] = unaffected_earnings_account.id
+        data["limit_text"] = self.env["general.ledger.report.wizard"]._limit_text
         start_time = gettime.perf_counter()
         report_name = "a_f_r.report_general_ledger_xlsx"
         report_type = "xlsx"
@@ -203,7 +242,7 @@ class GeneralLedgerJobRunner(models.Model):
             [("report_name", "=", report_name), ("report_type", "=", report_type)],
             limit=1,
         )
-        content, content_type = report._render_xlsx(report.report_name, wizard.ids, data=data)
+        content, content_type = report._render_xlsx(report.report_name, False, data=data)
         end_time = gettime.perf_counter()
         elapsed = end_time - start_time
         formated_time = format_time(elapsed)

@@ -890,7 +890,10 @@ class GeneralLedgerReport(models.AbstractModel):
         if show_log:
             report_start = time.time()
         res = super()._get_report_values(docids, data)
-        wizard_id = data["wizard_id"]
+        if "wizard_id" in data:
+            data["wizard_id"]
+        else:
+            wizard_id = False
         company = self.env["res.company"].browse(data["company_id"])
         company_id = data["company_id"]
         date_to = data["date_to"]
@@ -1030,11 +1033,17 @@ class GeneralLedgerReport(models.AbstractModel):
             if not gl_item["currency_id"] and len(fin_bal_currency_ids) == 1:
                 fin_bal_currency_id = fin_bal_currency_ids[0]
             gl_item["fin_bal_currency_id"] = fin_bal_currency_id
+        if wizard_id:
+            doc_ids = [wizard_id]
+            docs = self.env["general.ledger.report.wizard"].browse(wizard_id)
+        else:
+            doc_ids = False
+            docs = False
         res.update(
             {
-                "doc_ids": [wizard_id],
+                "doc_ids": doc_ids,
                 "doc_model": "general.ledger.report.wizard",
-                "docs": self.env["general.ledger.report.wizard"].browse(wizard_id),
+                "docs": docs,
                 "foreign_currency": data["foreign_currency"],
                 "company_name": company.display_name,
                 "company_currency": company.currency_id,

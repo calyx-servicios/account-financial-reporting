@@ -162,7 +162,13 @@ class AgedPartnerBalanceReport(models.AbstractModel):
         ]
 
     def _get_report_values(self, docids, data):
-        wizard = self.env[data["wizard_name"]].browse(data["wizard_id"])
-        return {
-            "limit_text": wizard._limit_text,
-        }
+        if "wizard_id" in data:
+            wizard = self.env[data["wizard_name"]].browse(data["wizard_id"])
+            return {
+                "limit_text": wizard._limit_text,
+            }
+        else:
+            limit_text =  self.env["general.ledger.report.wizard"]._limit_text
+            return {
+                "limit_text": limit_text,
+            }
