@@ -9,6 +9,7 @@ import os
 import shutil
 import pytz
 import logging
+import zipfile
 _logger = logging.getLogger(__name__)
 
 tz = pytz.timezone('America/Argentina/Buenos_Aires')
@@ -135,6 +136,9 @@ class GeneralLedgerJobRunner(models.Model):
                 today_path = os.path.abspath(os.path.join(company_path, today))
                 ledger_path = os.path.abspath(os.path.join(today_path, "general_ledger.xlsx"))
                 file_exists = os.path.isfile(ledger_path)
+                if not file_exists:
+                    ledger_path = os.path.abspath(os.path.join(today_path, "general_ledger.zip"))
+                    file_exists = os.path.isfile(ledger_path)
                 if file_exists:
                     self.create({
                         "date": today,
@@ -177,14 +181,66 @@ class GeneralLedgerJobRunner(models.Model):
             first_call = False
             ledger_reports_path = get_reports_dir()
             companys = self.env["res.company"].search([])
-            for company in companys:
+            for company:
                 generate_company, ledger_path = prepare_company(ledger_reports_path, company)
-                if generate_company:
+                if generate_company and not company.generate_ledger_accounts:
                     _logger.info(tag + "Generando Reporte para compañia %s" % company.name)
                     self.generate_ledger(ledger_path, company)
                     break
+                elif company.generate_ledger_accounts:
+                    account_id, account_ledger_path = self.get_generate_company_account(company, ledger_path)
+                    if account_id:
+                        _logger.info(tag + "Generando Reporte para compañia %s cuenta %s" % (company.name, account_id))
+                        self.generate_ledger(account_ledger_path, company, account_id=account_id)
+                        break
+                    if not account_id:
+                        generated = self.generate_zip_ledger(company, ledger_path)
+                        if generated:
+                            break
         except Exception as e:
             _logger.exception(f"{tag} Error generando reporte de libro mayor")
+
+    def generate_zip_ledger(self, company, ledger_path):
+        if company.generate_ledger_account_ids:
+            accounts = company.generate_ledger_account_ids
+        else:
+            accounts = self.env["account.account"].search([("company_id", "=", company.id)])
+        company_dir = os.path.abspath(os.path.dirname(ledger_path))
+        zip_path = os.path.abspath(os.path.join(company_dir, "general_ledger.zip"))
+        if not os.path.isfile(zip_path):
+            _logger.info(tag + "Generando .ZIP para compañia %s" % company.name)
+            ledger_paths = []
+            for account in accounts:
+                account_dir = os.path.join(company_dir, str(account.id))
+                acc_name = self.get_account_ledger_name(account)
+                account_ledger_path = os.path.abspath(os.path.join(account_dir, acc_name))
+                ledger_paths.append(account_ledger_path)
+            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for file_path in ledger_paths:
+                    arcname = os.path.basename(file_path)
+                    zf.write(file_path, arcname)
+            return True
+        return False
+
+    def get_account_ledger_name(self, account):
+        account_name = account.name.replace('.', ':')
+        return f"Libro mayor {account_name}.xlsx"
+
+    def get_generate_company_account(self, company, ledger_path):
+        if company.generate_ledger_account_ids:
+            accounts = company.generate_ledger_account_ids
+        else:
+            accounts = self.env["account.account"].search([("company_id", "=", company.id)])
+        company_dir = os.path.abspath(os.path.dirname(ledger_path))
+        for account in accounts:
+            account_dir = os.path.join(company_dir, str(account.id))
+            os.makedirs(account_dir, exist_ok=True)
+            acc_name = self.get_account_ledger_name(account)
+            account_ledger_path = os.path.abspath(os.path.join(account_dir, acc_name))
+            if not os.path.isfile(account_ledger_path):
+                return account.id, account_ledger_path
+        return False, False
+
 
     def _get_general_ledger_data(self):
         return {
@@ -207,7 +263,7 @@ class GeneralLedgerJobRunner(models.Model):
             'domain': []
         }
 
-    def generate_ledger(self, ledger_path, company):
+    def generate_ledger(self, ledger_path, company, account_id=False):
         data = self._get_general_ledger_data()
         company_id = company.id
         today = datetime.now(tz).date()
@@ -223,6 +279,8 @@ class GeneralLedgerJobRunner(models.Model):
         data["date_from"] = date_from
         data["date_to"] = date_to
         data["company_id"] = company_id
+        if account_id:
+            data["account_ids"] = [account_id]
         fy_start_date, foo = date_utils.get_fiscal_year(
             date_from,
             day=company.fiscalyear_last_day,
@@ -246,10 +304,9 @@ class GeneralLedgerJobRunner(models.Model):
         end_time = gettime.perf_counter()
         elapsed = end_time - start_time
         formated_time = format_time(elapsed)
-
+        time_path = os.path.abspath(os.path.join(os.path.dirname(ledger_path), "time.txt"))
         with open(ledger_path, "wb") as f:
             f.write(content)
-        time_path = os.path.abspath(os.path.join(os.path.dirname(ledger_path), "time.txt"))
         with open(time_path, "w") as f:
             f.write(formated_time)
         _logger.info(tag + "Reporte generado %s" % company.name)
@@ -275,7 +332,10 @@ class LedgerDownloadController(http.Controller):
 
         rec_date = record.date.strftime('%d-%m-%Y')
         rec_company = record.ccompany_id.name
-        filename = f"Libro Mayor {rec_company} {rec_date}.xlsx"
+        if file_path.endswith(".zip"):
+            filename = f"Libro Mayor {rec_company} {rec_date}.zip"
+        else:
+            filename = f"Libro Mayor {rec_company} {rec_date}.xlsx"
         with open(file_path, 'rb') as f:
             file_content = f.read()
         headers = [
@@ -284,3 +344,14 @@ class LedgerDownloadController(http.Controller):
         ]
 
         return request.make_response(file_content, headers)
+
+class ResCompany(models.Model):
+    _inherit="res.company"
+
+    generate_ledger_accounts = fields.Boolean(
+        String="Generar el reporte de libro mayor separado por cuentas"
+    )
+    generate_ledger_account_ids = fields.Many2many(
+        comodel_name="account.account",
+        String="Cuentas a generar en reporte libro mayor"
+    )

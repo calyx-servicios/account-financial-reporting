@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<odoo>
+    <record model="ir.ui.view" id="view_res_company_form">
+        <field name="name">res.company.form.inherit</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="model">res.company</field>
+        <field name="type">form</field>
+        <field name="arch" type="xml">
+            <field name="currency_id" position="after">
+                <field name="generate_ledger_accounts" string="Generar el reporte de libro mayor separado por cuentas"/>
+                <field name="generate_ledger_account_ids" invisible="not generate_ledger_accounts" options="{'no_create': True, 'no_create_edit': True}" widget="many2many_tags"/>
+            </field>
+        </field>
+    </record>
+</odoo>

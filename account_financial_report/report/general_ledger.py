@@ -893,7 +893,7 @@ class GeneralLedgerReport(models.AbstractModel):
             report_start = time.time()
         res = super()._get_report_values(docids, data)
         if "wizard_id" in data:
-            data["wizard_id"]
+            wizard_id = data["wizard_id"]
         else:
             wizard_id = False
         company = self.env["res.company"].browse(data["company_id"])
