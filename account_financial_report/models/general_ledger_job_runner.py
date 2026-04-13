@@ -223,7 +223,7 @@ class GeneralLedgerJobRunner(models.Model):
         return False
 
     def get_account_ledger_name(self, account):
-        account_name = account.name.replace('.', ':')
+        account_name = account.name.replace('/', '|')
         return f"Libro mayor {account_name}.xlsx"
 
     def get_generate_company_account(self, company, ledger_path):
