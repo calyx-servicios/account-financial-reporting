@@ -181,7 +181,7 @@ class GeneralLedgerJobRunner(models.Model):
             first_call = False
             ledger_reports_path = get_reports_dir()
             companys = self.env["res.company"].search([])
-            for company:
+            for company in companys:
                 generate_company, ledger_path = prepare_company(ledger_reports_path, company)
                 if generate_company and not company.generate_ledger_accounts:
                     _logger.info(tag + "Generando Reporte para compañia %s" % company.name)
