@@ -267,10 +267,10 @@ class GeneralLedgerJobRunner(models.Model):
     def get_generate_company_by_part(self, company, ledger_path):
         company_dir = os.path.abspath(os.path.dirname(ledger_path))
         today = datetime.today()
+        test_date_to = get_param(self.env, "general_ledger_cron.test_date_to")
+        if test_date_to:
+            today = datetime.strptime(test_date_to, "%Y-%m-%d").date()
         end_day = int(today.day)
-        test_day_to = get_param(self.env, "general_ledger_cron.test_day_to")
-        if test_day_to:
-            end_day = int(test_day_to)
         rangos = dividir_rango(end_day)
         for i, date_range in enumerate(rangos):
             part = f"part{i+1}"
@@ -320,9 +320,10 @@ class GeneralLedgerJobRunner(models.Model):
         first_day = today.replace(day=1)
         date_from = first_day
         date_to = today
-        test_day_to = get_param(self.env, "general_ledger_cron.test_day_to")
-        if test_day_to:
-            date_to = date_to.replace(day=int(test_day_to))
+        test_date_to = get_param(self.env, "general_ledger_cron.test_date_to")
+        if test_date_to:
+            date_to = datetime.strptime(test_date_to, "%Y-%m-%d").date()
+            date_from = date_to.replace(day=1)
         if date_range:
             date_from = date_range["date_from"]
             date_to = date_range["date_to"]
