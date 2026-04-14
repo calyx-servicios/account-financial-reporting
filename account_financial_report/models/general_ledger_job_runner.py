@@ -18,8 +18,48 @@ _logger = logging.getLogger(__name__)
 tag = "GENERAL LEDGER CRON: "
 first_call = True
 
+def dividir_rango(fecha_fin_dia, n=5):
+    tam_bloque = n
+    total_dias = fecha_fin_dia
+    partes = []
+
+    inicio = 1
+
+    while inicio <= total_dias:
+        fin = inicio + tam_bloque - 1
+
+        if fin >= total_dias:
+            # último bloque
+            partes.append((inicio, total_dias))
+            break
+
+        partes.append((inicio, fin))
+        inicio = fin + 1
+
+    # 🔹 Si el último bloque tiene 1 solo día → lo fusionamos
+    if len(partes) >= 2:
+        ultimo_inicio, ultimo_fin = partes[-1]
+        if ultimo_fin - ultimo_inicio == 0:  # tamaño 1
+            ante_inicio, _ = partes[-2]
+            partes[-2] = (ante_inicio, ultimo_fin)
+            partes.pop()
+
+    return partes
+
 def get_param(env, param):
     return env['ir.config_parameter'].sudo().get_param(param, False)
+
+def get_time_path(file_path):
+    file_path_dir = os.path.abspath(os.path.dirname(file_path))
+    time_paths = list(Path(file_path_dir).rglob("time.txt"))
+    time = 0
+    for time_path in time_paths:
+        with open(time_path, "r") as f:
+            time += float(f.read().strip())
+    if time:
+        return format_time(time)
+    else:
+        return '-'
 
 def format_time(seconds):
     ms = int((seconds % 1) * 1000)
@@ -83,6 +123,9 @@ class GeneralLedgerJobRunner(models.Model):
         string="Tiempo de procesado",
         compute="compute_fields"
     )
+    extension_file = fields.Char(
+        string="Formato"
+    )
     file_path = fields.Text()
     # Doble cc intencional
     ccompany_id = fields.Many2one(
@@ -97,11 +140,13 @@ class GeneralLedgerJobRunner(models.Model):
             rec.name = f"Desde: {start_date} - Hasta: {end_date}"
             rec.disk_space = format_size(rec.file_path)
             rec.exec_time = "-"
+            rec.extension_file = "-"
             if rec.file_path:
-                time_path = os.path.abspath(os.path.join(os.path.dirname(rec.file_path), "time.txt"))
-                if os.path.isfile(time_path):
-                    with open(time_path, "r") as f:
-                        rec.exec_time = f.read().strip()
+                if rec.file_path.endswith('.xlsx'):
+                    rec.extension_file = "XLSX"
+                if rec.file_path.endswith('.zip'):
+                    rec.extension_file = "ZIP"
+                rec.exec_time = get_time_path(rec.file_path)
 
     def action_open_ledger_reports(self):
         self.create_records()
@@ -183,17 +228,17 @@ class GeneralLedgerJobRunner(models.Model):
             companys = self.env["res.company"].search([])
             for company in companys:
                 generate_company, ledger_path = prepare_company(ledger_reports_path, company)
-                if generate_company and not company.generate_ledger_accounts:
+                if generate_company and not company.divide_ledger_files:
                     _logger.info(tag + "Generando Reporte para compañia %s" % company.name)
                     self.generate_ledger(ledger_path, company)
                     break
-                elif company.generate_ledger_accounts:
-                    account_id, account_ledger_path = self.get_generate_company_account(company, ledger_path)
-                    if account_id:
-                        _logger.info(tag + "Generando Reporte para compañia %s cuenta %s" % (company.name, account_id))
-                        self.generate_ledger(account_ledger_path, company, account_id=account_id)
+                elif company.divide_ledger_files:
+                    date_range, output_ledger_path = self.get_generate_company_by_part(company, ledger_path)
+                    if date_range:
+                        _logger.info(tag + "Generando Reporte para compañia %s desde %s hasta %s" % (company.name, date_range["date_from"], date_range["date_to"]))
+                        self.generate_ledger(output_ledger_path, company, date_range=date_range)
                         break
-                    if not account_id:
+                    if not date_range:
                         generated = self.generate_zip_ledger(company, ledger_path)
                         if generated:
                             break
@@ -201,24 +246,17 @@ class GeneralLedgerJobRunner(models.Model):
             _logger.exception(f"{tag} Error generando reporte de libro mayor")
 
     def generate_zip_ledger(self, company, ledger_path):
-        if company.generate_ledger_account_ids:
-            accounts = company.generate_ledger_account_ids
-        else:
-            accounts = self.env["account.account"].search([("company_id", "=", company.id)])
         company_dir = os.path.abspath(os.path.dirname(ledger_path))
         zip_path = os.path.abspath(os.path.join(company_dir, "general_ledger.zip"))
         if not os.path.isfile(zip_path):
             _logger.info(tag + "Generando .ZIP para compañia %s" % company.name)
-            ledger_paths = []
-            for account in accounts:
-                account_dir = os.path.join(company_dir, str(account.id))
-                acc_name = self.get_account_ledger_name(account)
-                account_ledger_path = os.path.abspath(os.path.join(account_dir, acc_name))
-                ledger_paths.append(account_ledger_path)
+            ledger_paths = list(Path(company_dir).rglob("*.xlsx"))
             with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
                 for file_path in ledger_paths:
-                    arcname = os.path.basename(file_path)
-                    zf.write(file_path, arcname)
+                    part_dir = os.path.basename(os.path.dirname(file_path))
+                    if "part" in part_dir:
+                        arcname = os.path.basename(file_path)
+                        zf.write(file_path, arcname)
             return True
         return False
 
@@ -226,19 +264,31 @@ class GeneralLedgerJobRunner(models.Model):
         account_name = account.name.replace('/', '|')
         return f"Libro mayor {account_name}.xlsx"
 
-    def get_generate_company_account(self, company, ledger_path):
-        if company.generate_ledger_account_ids:
-            accounts = company.generate_ledger_account_ids
-        else:
-            accounts = self.env["account.account"].search([("company_id", "=", company.id)])
+    def get_generate_company_by_part(self, company, ledger_path):
         company_dir = os.path.abspath(os.path.dirname(ledger_path))
-        for account in accounts:
-            account_dir = os.path.join(company_dir, str(account.id))
-            os.makedirs(account_dir, exist_ok=True)
-            acc_name = self.get_account_ledger_name(account)
-            account_ledger_path = os.path.abspath(os.path.join(account_dir, acc_name))
-            if not os.path.isfile(account_ledger_path):
-                return account.id, account_ledger_path
+        today = datetime.today()
+        end_day = int(today.day)
+        test_day_to = get_param(self.env, "general_ledger_cron.test_day_to")
+        if test_day_to:
+            end_day = int(test_day_to)
+        rangos = dividir_rango(end_day)
+        for i, date_range in enumerate(rangos):
+            part = f"part{i+1}"
+            part_dir = os.path.join(company_dir, part)
+            os.makedirs(part_dir, exist_ok=True)
+            date_from = today.replace(day=date_range[0])
+            date_to = today.replace(day=date_range[1])
+            file_name = "Libro mayor %s hasta %s.xlsx" % (
+                date_from.strftime("%d-%m-%Y"),
+                date_to.strftime("%d-%m-%Y")
+            )
+            part_ledger_path = os.path.abspath(os.path.join(part_dir, file_name))
+            if not os.path.isfile(part_ledger_path):
+                date_range_out = {
+                    "date_from": date_from,
+                    "date_to": date_to,
+                }
+                return date_range_out, part_ledger_path
         return False, False
 
 
@@ -263,24 +313,22 @@ class GeneralLedgerJobRunner(models.Model):
             'domain': []
         }
 
-    def generate_ledger(self, ledger_path, company, account_id=False):
+    def generate_ledger(self, ledger_path, company, date_range=False):
         data = self._get_general_ledger_data()
         company_id = company.id
         today = datetime.now(tz).date()
         first_day = today.replace(day=1)
         date_from = first_day
         date_to = today
-        test_date_from = get_param(self.env, "general_ledger_cron.test_date_from")
-        test_date_to = get_param(self.env, "general_ledger_cron.test_date_to")
-        if test_date_from:
-            date_from = datetime.strptime(test_date_from, "%Y-%m-%d").date()
-        if test_date_to:
-            date_to = datetime.strptime(test_date_to, "%Y-%m-%d").date()
+        test_day_to = get_param(self.env, "general_ledger_cron.test_day_to")
+        if test_day_to:
+            date_to = date_to.replace(day=int(test_day_to))
+        if date_range:
+            date_from = date_range["date_from"]
+            date_to = date_range["date_to"]
         data["date_from"] = date_from
         data["date_to"] = date_to
         data["company_id"] = company_id
-        if account_id:
-            data["account_ids"] = [account_id]
         fy_start_date, foo = date_utils.get_fiscal_year(
             date_from,
             day=company.fiscalyear_last_day,
@@ -303,12 +351,11 @@ class GeneralLedgerJobRunner(models.Model):
         content, content_type = report._render_xlsx(report.report_name, False, data=data)
         end_time = gettime.perf_counter()
         elapsed = end_time - start_time
-        formated_time = format_time(elapsed)
         time_path = os.path.abspath(os.path.join(os.path.dirname(ledger_path), "time.txt"))
         with open(ledger_path, "wb") as f:
             f.write(content)
         with open(time_path, "w") as f:
-            f.write(formated_time)
+            f.write(str(elapsed))
         _logger.info(tag + "Reporte generado %s" % company.name)
 
     def download_report(self):
@@ -348,10 +395,6 @@ class LedgerDownloadController(http.Controller):
 class ResCompany(models.Model):
     _inherit="res.company"
 
-    generate_ledger_accounts = fields.Boolean(
-        String="Generar el reporte de libro mayor separado por cuentas"
-    )
-    generate_ledger_account_ids = fields.Many2many(
-        comodel_name="account.account",
-        String="Cuentas a generar en reporte libro mayor"
+    divide_ledger_files = fields.Boolean(
+        String="Generar el reporte de libro mayor separado por partes"
     )

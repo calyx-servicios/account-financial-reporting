@@ -9,6 +9,7 @@
                 <field name="name"/>
                 <field name="disk_space"/>
                 <field name="exec_time"/>
+                <field name="extension_file"/>
                 <field name="ccompany_id"/>
                 <button string="Descargar" name="download_report" type="object" class="oe_highlight"/>
             </tree>

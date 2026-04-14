@@ -7,8 +7,7 @@
         <field name="type">form</field>
         <field name="arch" type="xml">
             <field name="currency_id" position="after">
-                <field name="generate_ledger_accounts" string="Generar el reporte de libro mayor separado por cuentas"/>
-                <field name="generate_ledger_account_ids" invisible="not generate_ledger_accounts" options="{'no_create': True, 'no_create_edit': True}" widget="many2many_tags"/>
+                <field name="divide_ledger_files"/>
             </field>
         </field>
     </record>
