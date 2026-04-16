@@ -10,6 +10,7 @@ import shutil
 import pytz
 import logging
 import zipfile
+import gc
 _logger = logging.getLogger(__name__)
 
 tz = pytz.timezone('America/Argentina/Buenos_Aires')
@@ -244,6 +245,9 @@ class GeneralLedgerJobRunner(models.Model):
                             break
         except Exception as e:
             _logger.exception(f"{tag} Error generando reporte de libro mayor")
+        self.env.cr.commit()
+        self.env.clear()
+        gc.collect()
 
     def generate_zip_ledger(self, company, ledger_path):
         company_dir = os.path.abspath(os.path.dirname(ledger_path))
@@ -314,6 +318,7 @@ class GeneralLedgerJobRunner(models.Model):
         }
 
     def generate_ledger(self, ledger_path, company, date_range=False):
+        self = self.with_context(create_xlsx_report=ledger_path)
         data = self._get_general_ledger_data()
         company_id = company.id
         today = datetime.now(tz).date()
@@ -349,12 +354,10 @@ class GeneralLedgerJobRunner(models.Model):
             [("report_name", "=", report_name), ("report_type", "=", report_type)],
             limit=1,
         )
-        content, content_type = report._render_xlsx(report.report_name, False, data=data)
+        report._render_xlsx(report.report_name, False, data=data)
         end_time = gettime.perf_counter()
         elapsed = end_time - start_time
         time_path = os.path.abspath(os.path.join(os.path.dirname(ledger_path), "time.txt"))
-        with open(ledger_path, "wb") as f:
-            f.write(content)
         with open(time_path, "w") as f:
             f.write(str(elapsed))
         _logger.info(tag + "Reporte generado %s" % company.name)
