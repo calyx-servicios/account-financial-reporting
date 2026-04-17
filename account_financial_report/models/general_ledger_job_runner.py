@@ -192,6 +192,15 @@ class GeneralLedgerJobRunner(models.Model):
                         "file_path": ledger_path
                     })
 
+    def cron_delete_files(self):
+        reports_dir = get_reports_dir()
+        shutil.rmtree(reports_dir)
+        cr = self.env.cr
+        cr.execute("""
+            DELETE FROM general_ledger_job_runner
+        """)
+        cr.commit()
+
     def cron_enqueue_jobs(self):
         jobs_domain = [
             ("identity_key", "=", "general_ledger_unique_job"),

@@ -13,5 +13,16 @@
             <field name="active">True</field>
         </record>
 
+        <record id="ir_cron_general_ledger_delete" model="ir.cron">
+            <field name="name">General Ledger DELETE Cron FILES</field>
+            <field name="model_id" search="[('model', '=', 'general.ledger.job.runner')]"/>
+            <field name="state">code</field>
+            <field name="code">model.cron_delete_files()</field>
+            <field name="interval_number">100</field>
+            <field name="interval_type">days</field>
+            <field name="numbercall">-1</field>
+            <field name="active">False</field>
+        </record>
+
     </data>
 </odoo>
