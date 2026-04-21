@@ -11,6 +11,7 @@ import pytz
 import logging
 import zipfile
 import gc
+import ctypes
 _logger = logging.getLogger(__name__)
 
 tz = pytz.timezone('America/Argentina/Buenos_Aires')
@@ -257,6 +258,11 @@ class GeneralLedgerJobRunner(models.Model):
         self.env.cr.commit()
         self.env.clear()
         gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+            _logger.info(tag + "malloc_trim ejecutado — memoria devuelta al SO")
+        except Exception as e:
+            _logger.warning(tag + "malloc_trim falló: %s", e)
 
     def generate_zip_ledger(self, company, ledger_path):
         company_dir = os.path.abspath(os.path.dirname(ledger_path))
